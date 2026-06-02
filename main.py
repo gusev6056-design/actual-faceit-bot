@@ -1,8 +1,10 @@
+import os
 import telebot
 from telebot import types
 import sqlite3
 
-TOKEN = "8914521673:AAHaGCPmSq5PF6nu9xlEWm2DQe_-qPXx5QI"
+# Токен из переменных окружения (БЕЗОПАСНО!)
+TOKEN = os.environ.get("BOT_TOKEN"8992378453:AAE5chyJsnbcPHS1YMZ03BWoCR8XKllcSfA")
 ADMIN_ID = 8521250777
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
@@ -140,11 +142,9 @@ def cb_profile(c):
     bot.answer_callback_query(c.id)
 
 # ==================== ОСТАЛЬНЫЕ КНОПКИ ====================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("menu_") and c.data != "menu_profile")
 def cb_other(c):
     action = c.data.split("_")[1]
-    if action in ["profile"]:
-        return  # уже обработано выше
     bot.edit_message_text(f"🚧 {action} в разработке", c.message.chat.id, c.message.message_id)
     bot.answer_callback_query(c.id)
 
