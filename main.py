@@ -18,7 +18,6 @@ def run_flask():
 threading.Thread(target=run_flask, daemon=True).start()
 
 # ==================== КОНФИГ ====================
-# Токен берется из переменных окружения Render (НЕ ПИШИ ТОКЕН ЗДЕСЬ!)
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 8521250777
 
@@ -37,22 +36,23 @@ def init_db():
             game_id TEXT,
             device TEXT,
             elo INTEGER DEFAULT 1000,
-            coins INTEGER DEFAULT 0,
+            coins INTEGER DEFAULT 100,
             wins INTEGER DEFAULT 0,
             losses INTEGER DEFAULT 0,
             is_admin INTEGER DEFAULT 0,
             registered INTEGER DEFAULT 0
         )
     ''')
-    cur.execute("INSERT OR IGNORE INTO players (user_id, username, registered, is_admin) VALUES (?, 'Admin', 1, 1)", (ADMIN_ID,))
     conn.commit()
     conn.close()
+    print("✅ База данных готова")
 
 def register_user(user_id, username, game_id, device):
     conn = sqlite3.connect(DB)
     conn.execute("INSERT OR REPLACE INTO players (user_id, username, game_id, device, registered, coins, elo) VALUES (?,?,?,?,1,100,1000)", (user_id, username, game_id, device))
     conn.commit()
     conn.close()
+    print(f"✅ Зарегистрирован: {username}")
 
 def get_player(user_id):
     conn = sqlite3.connect(DB)
@@ -65,10 +65,6 @@ def get_player(user_id):
 def is_registered(user_id):
     p = get_player(user_id)
     return p is not None and p[9] == 1
-
-def is_admin(user_id):
-    p = get_player(user_id)
-    return p is not None and p[8] == 1
 
 # ==================== ГЛАВНОЕ МЕНЮ ====================
 def main_menu():
@@ -88,6 +84,7 @@ user_flow = {}
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
     uid = msg.from_user.id
+    
     if is_registered(uid):
         bot.send_message(uid, "⚡ ACTUAL FACEIT", reply_markup=main_menu())
         return
@@ -100,17 +97,17 @@ def reg_nick(msg):
     uid = msg.from_user.id
     nick = msg.text.strip()
     if not (2 <= len(nick) <= 20):
-        bot.send_message(uid, "❌ Никнейм должен быть 2-20 символов. Попробуй ещё раз:")
+        bot.send_message(uid, "❌ Никнейм 2-20 символов")
         return
     user_flow[uid] = {"state": "id", "nick": nick}
-    bot.send_message(uid, "<b>Шаг 2:</b> Введи свой игровой ID (только цифры):", parse_mode="HTML")
+    bot.send_message(uid, "<b>Шаг 2:</b> Введи игровой ID (цифры):", parse_mode="HTML")
 
 @bot.message_handler(func=lambda m: user_flow.get(m.from_user.id, {}).get("state") == "id")
 def reg_id(msg):
     uid = msg.from_user.id
     game_id = msg.text.strip()
     if not game_id.isdigit():
-        bot.send_message(uid, "❌ ID должен содержать только цифры. Попробуй ещё раз:")
+        bot.send_message(uid, "❌ Только цифры")
         return
     user_flow[uid]["game_id"] = game_id
     user_flow[uid]["state"] = "device"
@@ -135,15 +132,19 @@ def reg_device(msg):
     bot.send_message(uid, "⚡ ACTUAL FACEIT", reply_markup=main_menu())
 
 # ==================== ПРОФИЛЬ ====================
-def get_profile_text(uid):
+@bot.callback_query_handler(func=lambda c: c.data == "menu_profile")
+def cb_profile(c):
+    uid = c.from_user.id
     p = get_player(uid)
     if not p:
-        return "❌ Ошибка"
+        bot.edit_message_text("❌ Ошибка", c.message.chat.id, c.message.message_id)
+        bot.answer_callback_query(c.id)
+        return
     
     games = p[6] + p[7]
     winrate = round(p[6] / games * 100, 1) if games > 0 else 0
     
-    return (f"👤 <b>{p[1]}</b>\n"
+    text = (f"👤 <b>{p[1]}</b>\n"
             f"🆔 ID: {p[0]}\n"
             f"🎮 Game ID: {p[2]}\n"
             f"📱 Device: {p[3]}\n"
@@ -152,12 +153,19 @@ def get_profile_text(uid):
             f"🏆 Побед: {p[6]}\n"
             f"❌ Поражений: {p[7]}\n"
             f"📈 Винрейт: {winrate}%")
-
-@bot.callback_query_handler(func=lambda c: c.data == "menu_profile")
-def cb_profile(c):
-    text = get_profile_text(c.from_user.id)
+    
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
+
+# ==================== ДИАГНОСТИКА ====================
+@bot.message_handler(commands=['check'])
+def cmd_check(msg):
+    uid = msg.from_user.id
+    p = get_player(uid)
+    if p:
+        bot.send_message(uid, f"✅ Ты в базе!\nID: {p[0]}\nИмя: {p[1]}\nRegistered: {p[9]}")
+    else:
+        bot.send_message(uid, "❌ Тебя нет в базе! Напиши /start")
 
 # ==================== ОСТАЛЬНЫЕ КНОПКИ ====================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("menu_") and c.data != "menu_profile")
