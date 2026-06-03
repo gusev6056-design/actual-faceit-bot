@@ -155,7 +155,7 @@ def cb_profile(c):
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
-# ==================== ЛОББИ ====================
+# ==================== ЛОББИ (2 РЯДА) ====================
 active_lobbies = {}
 user_lobby = {}
 
@@ -179,24 +179,66 @@ def cb_back(c):
 def cb_lobby(c):
     league = c.data.split("_")[1]
     
-    text = f"🎮 <b>Лобби {league.upper()}</b>\n\n"
+    # Кнопки 1-5
     kb = types.InlineKeyboardMarkup(row_width=5)
     
-    # MOBILE
-    btns = []
-    for i in range(1, 6):
-        btns.append(types.InlineKeyboardButton(f"📱{i}", callback_data=f"join_{league}_mobile_{i}"))
-    kb.row(*btns)
+    # Ряд MOBILE (1-5)
+    mobile_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_mobile_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        mobile_btns.append(types.InlineKeyboardButton(f"{emoji}M{slot}({count})", callback_data=f"join_{league}_mobile_{slot}"))
+    kb.row(*mobile_btns)
     
-    # PC
-    btns = []
-    for i in range(1, 6):
-        btns.append(types.InlineKeyboardButton(f"💻{i}", callback_data=f"join_{league}_pc_{i}"))
-    kb.row(*btns)
+    # Ряд PC (1-5)
+    pc_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_pc_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        pc_btns.append(types.InlineKeyboardButton(f"{emoji}P{slot}({count})", callback_data=f"join_{league}_pc_{slot}"))
+    kb.row(*pc_btns)
     
+    # Кнопки 6-10 и назад
+    kb.add(types.InlineKeyboardButton("➡️ Лобби 6-10", callback_data=f"lobby_page2_{league}"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="find"))
     
-    bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+    bot.edit_message_text(f"🎮 <b>ЛОББИ {league.upper()}</b>\n\nВыбери слот:", c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lobby_page2_"))
+def cb_lobby_page2(c):
+    league = c.data.split("_")[2]
+    
+    kb = types.InlineKeyboardMarkup(row_width=5)
+    
+    # Ряд MOBILE (6-10)
+    mobile_btns = []
+    for slot in range(6, 11):
+        lobby_id = f"{league}_mobile_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        mobile_btns.append(types.InlineKeyboardButton(f"{emoji}M{slot}({count})", callback_data=f"join_{league}_mobile_{slot}"))
+    kb.row(*mobile_btns)
+    
+    # Ряд PC (6-10)
+    pc_btns = []
+    for slot in range(6, 11):
+        lobby_id = f"{league}_pc_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        pc_btns.append(types.InlineKeyboardButton(f"{emoji}P{slot}({count})", callback_data=f"join_{league}_pc_{slot}"))
+    kb.row(*pc_btns)
+    
+    kb.add(types.InlineKeyboardButton("⬅️ Лобби 1-5", callback_data=f"lobby_{league}"))
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="find"))
+    
+    bot.edit_message_text(f"🎮 <b>ЛОББИ {league.upper()}</b>\n\nВыбери слот:", c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
@@ -206,13 +248,15 @@ def cb_join(c):
     uid = c.from_user.id
     lobby_id = f"{league}_{device}_{slot}"
     
-    # Выход из старого
+    # Выход из старого лобби
     old = user_lobby.get(uid)
     if old and old in active_lobbies:
         if uid in active_lobbies[old]["players"]:
             active_lobbies[old]["players"].remove(uid)
+            if len(active_lobbies[old]["players"]) == 0:
+                del active_lobbies[old]
     
-    # Создание
+    # Создание лобби
     if lobby_id not in active_lobbies:
         active_lobbies[lobby_id] = {
             "players": [],
@@ -224,22 +268,22 @@ def cb_join(c):
     lobby = active_lobbies[lobby_id]
     
     if len(lobby["players"]) >= 10:
-        bot.answer_callback_query(c.id, "❌ Лобби полное!")
+        bot.answer_callback_query(c.id, "❌ Лобби полное!", show_alert=True)
         return
     
     lobby["players"].append(uid)
     user_lobby[uid] = lobby_id
     
-    # Показываем состав
-    text = f"🎮 <b>Лобби #{slot} ({league.upper()}/{device.upper()})</b>\n👥 {len(lobby['players'])}/10\n\n"
+    # Показываем состав лобби
+    text = f"🎮 <b>Лобби #{slot} ({league.upper()}/{device.upper()})</b>\n👥 Игроков: {len(lobby['players'])}/10\n\n"
     for i, pid in enumerate(lobby["players"], 1):
         p = get_player(pid)
         name = p[1] if p else str(pid)
         text += f"{i}. {name}\n"
     
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🚪 Выйти", callback_data=f"leave_{lobby_id}"))
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"lobby_{league}"))
+    kb.add(types.InlineKeyboardButton("🚪 Выйти из лобби", callback_data=f"leave_{lobby_id}"))
+    kb.add(types.InlineKeyboardButton("🔙 К списку", callback_data=f"lobby_{league}"))
     
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
     bot.answer_callback_query(c.id, f"✅ Вы вошли в лобби {slot}!")
