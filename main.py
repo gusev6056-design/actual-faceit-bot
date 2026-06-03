@@ -5,7 +5,7 @@ import sqlite3
 from flask import Flask
 import threading
 
-# Flask для Render (чтобы был открытый порт)
+# ==================== FLASK ДЛЯ RENDER ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -17,8 +17,9 @@ def run_flask():
 
 threading.Thread(target=run_flask, daemon=True).start()
 
-# Токен из переменных окружения Render
-TOKEN = os.environ.get("8992378453:AAErkHAlWAYJJG54xnBntSW13ZNmc7zxOFA")
+# ==================== КОНФИГ ====================
+# Токен берется из переменных окружения Render (НЕ ПИШИ ТОКЕН ЗДЕСЬ!)
+TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 8521250777
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
@@ -64,6 +65,10 @@ def get_player(user_id):
 def is_registered(user_id):
     p = get_player(user_id)
     return p is not None and p[9] == 1
+
+def is_admin(user_id):
+    p = get_player(user_id)
+    return p is not None and p[8] == 1
 
 # ==================== ГЛАВНОЕ МЕНЮ ====================
 def main_menu():
@@ -130,19 +135,15 @@ def reg_device(msg):
     bot.send_message(uid, "⚡ ACTUAL FACEIT", reply_markup=main_menu())
 
 # ==================== ПРОФИЛЬ ====================
-@bot.callback_query_handler(func=lambda c: c.data == "menu_profile")
-def cb_profile(c):
-    uid = c.from_user.id
+def get_profile_text(uid):
     p = get_player(uid)
     if not p:
-        bot.edit_message_text("❌ Ошибка", c.message.chat.id, c.message.message_id)
-        bot.answer_callback_query(c.id)
-        return
+        return "❌ Ошибка"
     
     games = p[6] + p[7]
     winrate = round(p[6] / games * 100, 1) if games > 0 else 0
     
-    text = (f"👤 <b>{p[1]}</b>\n"
+    return (f"👤 <b>{p[1]}</b>\n"
             f"🆔 ID: {p[0]}\n"
             f"🎮 Game ID: {p[2]}\n"
             f"📱 Device: {p[3]}\n"
@@ -151,7 +152,10 @@ def cb_profile(c):
             f"🏆 Побед: {p[6]}\n"
             f"❌ Поражений: {p[7]}\n"
             f"📈 Винрейт: {winrate}%")
-    
+
+@bot.callback_query_handler(func=lambda c: c.data == "menu_profile")
+def cb_profile(c):
+    text = get_profile_text(c.from_user.id)
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
