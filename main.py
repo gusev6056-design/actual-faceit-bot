@@ -2,9 +2,23 @@ import os
 import telebot
 from telebot import types
 import sqlite3
+from flask import Flask
+import threading
 
-# Токен из переменных окружения (БЕЗОПАСНО!)
-TOKEN = os.environ.get("BOT_TOKEN"8992378453:AAE5chyJsnbcPHS1YMZ03BWoCR8XKllcSfA")
+# Flask для Render (чтобы был открытый порт)
+app = Flask(__name__)
+
+@app.route('/')
+def health():
+    return "Bot is running"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
+
+threading.Thread(target=run_flask, daemon=True).start()
+
+# Токен из переменных окружения Render
+TOKEN = os.environ.get("BOT_TOKEN", "8992378453:AAE5chYJsnbCPHS1YMZ03BWoCR8XK1lcSfA")
 ADMIN_ID = 8521250777
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
