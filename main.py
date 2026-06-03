@@ -4,6 +4,7 @@ from telebot import types
 import sqlite3
 from flask import Flask
 import threading
+import random
 
 # ==================== FLASK ====================
 app = Flask(__name__)
@@ -20,6 +21,8 @@ threading.Thread(target=run_flask, daemon=True).start()
 # ==================== КОНФИГ ====================
 TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 8521250777
+ACCEPT_TIMEOUT = 60
+MAPS = ["Breeze", "Rust", "Province", "Sakura", "Sandstone"]
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
 
@@ -155,7 +158,7 @@ def cb_profile(c):
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, parse_mode="HTML")
     bot.answer_callback_query(c.id)
 
-# ==================== ЛОББИ (2 РЯДА) ====================
+# ==================== ЛОББИ ====================
 active_lobbies = {}
 user_lobby = {}
 
@@ -175,11 +178,10 @@ def cb_back(c):
     bot.edit_message_text("⚡ ACTUAL FACEIT", c.message.chat.id, c.message.message_id, reply_markup=main_menu())
     bot.answer_callback_query(c.id)
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("lobby_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lobby_") and not c.data.startswith("lobby_page2_"))
 def cb_lobby(c):
     league = c.data.split("_")[1]
     
-    # Кнопки 1-5
     kb = types.InlineKeyboardMarkup(row_width=5)
     
     # Ряд MOBILE (1-5)
@@ -202,7 +204,6 @@ def cb_lobby(c):
         pc_btns.append(types.InlineKeyboardButton(f"{emoji}P{slot}({count})", callback_data=f"join_{league}_pc_{slot}"))
     kb.row(*pc_btns)
     
-    # Кнопки 6-10 и назад
     kb.add(types.InlineKeyboardButton("➡️ Лобби 6-10", callback_data=f"lobby_page2_{league}"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="find"))
     
@@ -262,10 +263,15 @@ def cb_join(c):
             "players": [],
             "league": league,
             "device": device,
-            "slot": slot
+            "slot": slot,
+            "status": "waiting"
         }
     
     lobby = active_lobbies[lobby_id]
+    
+    if lobby["status"] != "waiting":
+        bot.answer_callback_query(c.id, "❌ Лобби уже в игре!", show_alert=True)
+        return
     
     if len(lobby["players"]) >= 10:
         bot.answer_callback_query(c.id, "❌ Лобби полное!", show_alert=True)
@@ -287,6 +293,10 @@ def cb_join(c):
     
     bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
     bot.answer_callback_query(c.id, f"✅ Вы вошли в лобби {slot}!")
+    
+    # Проверяем, набралось ли 10 человек
+    if len(lobby["players"]) >= 10:
+        start_accept_phase(lobby_id)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("leave_"))
 def cb_leave(c):
@@ -303,11 +313,257 @@ def cb_leave(c):
     league = lobby_id.split("_")[0]
     cb_lobby(c)
 
+# ==================== ПРИНЯТИЕ МАТЧА ====================
+def start_accept_phase(lobby_id):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby or lobby["status"] != "waiting":
+        return
+    
+    lobby["status"] = "accept"
+    lobby["ready"] = set()
+    lobby["accept_timers"] = {}
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("✅ Принять матч", callback_data=f"accept_{lobby_id}"))
+    kb.add(types.InlineKeyboardButton("🚪 Выйти", callback_data=f"leave_{lobby_id}"))
+    
+    for uid in lobby["players"]:
+        try:
+            bot.send_message(uid, f"⚔️ <b>МАТЧ НАЙДЕН!</b>\n\n⏳ У вас есть {ACCEPT_TIMEOUT} секунд, чтобы принять!\n\nНажмите кнопку ниже:", reply_markup=kb, parse_mode="HTML")
+        except:
+            pass
+        start_accept_timer(lobby_id, uid)
+
+def start_accept_timer(lobby_id, uid):
+    t = threading.Timer(ACCEPT_TIMEOUT, accept_timeout, [lobby_id, uid])
+    t.start()
+    active_lobbies[lobby_id]["accept_timers"][uid] = t
+
+def accept_timeout(lobby_id, uid):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby or lobby["status"] != "accept":
+        return
+    if uid in lobby["ready"]:
+        return
+    
+    if uid in lobby["players"]:
+        lobby["players"].remove(uid)
+    user_lobby.pop(uid, None)
+    
+    if uid in lobby["accept_timers"]:
+        lobby["accept_timers"][uid].cancel()
+        del lobby["accept_timers"][uid]
+    
+    try:
+        bot.send_message(uid, "⚠️ <b>Вы не приняли матч!</b>\nВы вышли из лобби.", parse_mode="HTML")
+    except:
+        pass
+    
+    if len(lobby["players"]) < 10:
+        lobby["status"] = "waiting"
+        for member_uid in lobby["players"]:
+            try:
+                bot.send_message(member_uid, "❌ Один из игроков не принял матч. Поиск возобновлён...", parse_mode="HTML")
+            except:
+                pass
+        update_lobby_display(lobby_id)
+
+def update_lobby_display(lobby_id):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby:
+        return
+    
+    text = f"🎮 <b>Лобби #{lobby['slot']} ({lobby['league'].upper()}/{lobby['device'].upper()})</b>\n👥 Игроков: {len(lobby['players'])}/10\n\n"
+    for i, pid in enumerate(lobby["players"], 1):
+        p = get_player(pid)
+        name = p[1] if p else str(pid)
+        text += f"{i}. {name}\n"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🚪 Выйти из лобби", callback_data=f"leave_{lobby_id}"))
+    kb.add(types.InlineKeyboardButton("🔙 К списку", callback_data=f"lobby_{lobby['league']}"))
+    
+    for uid in lobby["players"]:
+        try:
+            bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+        except:
+            pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("accept_"))
+def cb_accept_match(c):
+    lobby_id = c.data.split("_", 1)[1]
+    uid = c.from_user.id
+    lobby = active_lobbies.get(lobby_id)
+    
+    if not lobby or lobby["status"] != "accept":
+        bot.answer_callback_query(c.id, "❌ Матч не найден или уже принят")
+        return
+    
+    if uid not in lobby["players"]:
+        bot.answer_callback_query(c.id, "❌ Вы не в этом лобби")
+        return
+    
+    lobby["ready"].add(uid)
+    if uid in lobby["accept_timers"]:
+        lobby["accept_timers"][uid].cancel()
+        del lobby["accept_timers"][uid]
+    
+    bot.answer_callback_query(c.id, "✅ Вы приняли матч! Ожидаем остальных...")
+    
+    # Проверяем, все ли приняли
+    if len(lobby["ready"]) == len(lobby["players"]):
+        for member_uid in lobby["players"]:
+            try:
+                bot.send_message(member_uid, "✅ Все приняли матч! Начинаем выбор карты...", parse_mode="HTML")
+            except:
+                pass
+        start_veto(lobby_id)
+
+# ==================== ВЕТО КАРТ ====================
+def start_veto(lobby_id):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby or lobby["status"] != "accept":
+        return
+    
+    lobby["status"] = "veto"
+    lobby["bans"] = []
+    lobby["map_pool"] = MAPS.copy()
+    lobby["ban_count"] = 0
+    lobby["veto_turn"] = "ct"
+    
+    # Случайно выбираем капитанов
+    players = lobby["players"].copy()
+    random.shuffle(players)
+    lobby["team_ct"] = players[:5]
+    lobby["team_t"] = players[5:]
+    lobby["captain_ct"] = lobby["team_ct"][0]
+    lobby["captain_t"] = lobby["team_t"][0]
+    
+    send_veto_message(lobby_id)
+
+def send_veto_message(lobby_id):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby or lobby["status"] != "veto":
+        return
+    
+    turn = lobby["veto_turn"]
+    captain = lobby["captain_ct"] if turn == "ct" else lobby["captain_t"]
+    captain_name = get_player(captain)[1] if get_player(captain) else str(captain)
+    
+    text = f"🗺 <b>ВЫБОР КАРТЫ</b>\n\n"
+    text += f"📊 Бан {lobby['ban_count'] + 1}/4\n"
+    text += f"🎮 Ход: <b>{'🟦 CT' if turn == 'ct' else '🟧 T'}</b>\n"
+    text += f"👑 Капитан: {captain_name}\n\n"
+    text += "📋 Доступные карты:\n"
+    
+    for i, map_name in enumerate(lobby["map_pool"], 1):
+        text += f"{i}. {map_name}\n"
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for map_name in lobby["map_pool"]:
+        kb.add(types.InlineKeyboardButton(f"❌ Забанить {map_name}", callback_data=f"ban_{lobby_id}_{map_name}"))
+    
+    for uid in lobby["players"]:
+        try:
+            if uid == captain:
+                bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+            else:
+                bot.send_message(uid, text, parse_mode="HTML")
+        except:
+            pass
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("ban_"))
+def cb_ban(c):
+    _, lobby_id, map_name = c.data.split("_", 2)
+    uid = c.from_user.id
+    lobby = active_lobbies.get(lobby_id)
+    
+    if not lobby or lobby["status"] != "veto":
+        bot.answer_callback_query(c.id, "❌ Вето недоступно")
+        return
+    
+    turn = lobby["veto_turn"]
+    captain = lobby["captain_ct"] if turn == "ct" else lobby["captain_t"]
+    
+    if uid != captain:
+        bot.answer_callback_query(c.id, "❌ Сейчас не ваш ход!")
+        return
+    
+    if map_name not in lobby["map_pool"]:
+        bot.answer_callback_query(c.id, "❌ Карта уже забанена")
+        return
+    
+    lobby["map_pool"].remove(map_name)
+    lobby["bans"].append({"map": map_name, "by": turn})
+    lobby["ban_count"] += 1
+    
+    ban_text = f"🚫 <b>{'CT' if turn == 'ct' else 'T'}</b> забанил <b>{map_name}</b>"
+    for member_uid in lobby["players"]:
+        try:
+            bot.send_message(member_uid, ban_text, parse_mode="HTML")
+        except:
+            pass
+    
+    lobby["veto_turn"] = "t" if turn == "ct" else "ct"
+    
+    if lobby["ban_count"] >= 4 and len(lobby["map_pool"]) == 1:
+        final_map = lobby["map_pool"][0]
+        final_text = f"✅ <b>Финальная карта: {final_map}</b>"
+        for member_uid in lobby["players"]:
+            try:
+                bot.send_message(member_uid, final_text, parse_mode="HTML")
+            except:
+                pass
+        start_match_registration(lobby_id, final_map)
+    else:
+        send_veto_message(lobby_id)
+    
+    bot.answer_callback_query(c.id, f"✅ Карта {map_name} забанена!")
+
+def start_match_registration(lobby_id, map_name):
+    lobby = active_lobbies.get(lobby_id)
+    if not lobby:
+        return
+    
+    lobby["status"] = "registration"
+    lobby["map_name"] = map_name
+    
+    # Показываем составы команд
+    text = f"⚔️ <b>МАТЧ НАЧИНАЕТСЯ!</b>\n\n"
+    text += f"🗺 Карта: {map_name}\n"
+    text += f"🏆 Лига: {lobby['league'].upper()}\n\n"
+    text += f"🟦 <b>КОМАНДА CT</b>\n"
+    for i, uid in enumerate(lobby["team_ct"], 1):
+        p = get_player(uid)
+        name = p[1] if p else str(uid)
+        text += f"{i}. {name}\n"
+    text += f"\n🟧 <b>КОМАНДА T</b>\n"
+    for i, uid in enumerate(lobby["team_t"], 1):
+        p = get_player(uid)
+        name = p[1] if p else str(uid)
+        text += f"{i}. {name}\n"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("📸 Отправить результат", callback_data=f"result_{lobby_id}"))
+    
+    for uid in lobby["players"]:
+        try:
+            bot.send_message(uid, text, reply_markup=kb, parse_mode="HTML")
+        except:
+            pass
+
 # ==================== ОСТАЛЬНЫЕ КНОПКИ ====================
 @bot.callback_query_handler(func=lambda c: c.data in ["top", "shop", "inv"])
 def cb_other(c):
     bot.edit_message_text(f"🚧 {c.data} в разработке", c.message.chat.id, c.message.message_id)
     bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("result_"))
+def cb_result(c):
+    lobby_id = c.data.split("_", 1)[1]
+    uid = c.from_user.id
+    bot.answer_callback_query(c.id, "📸 Результаты матча (в разработке)")
+    bot.send_message(uid, "📸 Функция отправки результатов в разработке. Скоро будет доступна!")
 
 # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
