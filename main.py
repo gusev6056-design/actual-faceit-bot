@@ -166,14 +166,250 @@ def cmd_check(msg):
         bot.send_message(uid, f"✅ Ты в базе!\nID: {p[0]}\nИмя: {p[1]}\nRegistered: {p[9]}")
     else:
         bot.send_message(uid, "❌ Тебя нет в базе! Напиши /start")
+# ==================== ЛОББИ ====================
+active_lobbies = {}  # lobby_id -> {"players": [], "league": str}
+user_lobby = {}      # user_id -> lobby_id
 
+@bot.callback_query_handler(func=lambda c: c.data == "menu_find")
+def cb_find_match(c):
+    uid = c.from_user.id
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🎮 Default", callback_data="lobby_default"),
+        types.InlineKeyboardButton("⭐ Quals", callback_data="lobby_quals"),
+        types.InlineKeyboardButton("🔙 Назад", callback_data="menu_back")
+    )
+    bot.edit_message_text("🎮 Выбери лигу:", c.message.chat.id, c.message.message_id, reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lobby_"))
+def cb_show_lobbies(c):
+    league = c.data.split("_")[1]
+    
+    # Формируем список лобби
+    text = f"🎮 <b>Лобби {league.upper()}</b>\n\n"
+    kb = types.InlineKeyboardMarkup(row_width=5)
+    
+    # Ряд MOBILE
+    mobile_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_mobile_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        mobile_btns.append(types.InlineKeyboardButton(f"{emoji}{slot}", callback_data=f"join_{league}_mobile_{slot}"))
+    kb.row(*mobile_btns)
+    
+    # Ряд PC
+    pc_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_pc_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        pc_btns.append(types.InlineKeyboardButton(f"{emoji}{slot}", callback_data=f"join_{league}_pc_{slot}"))
+    kb.row(*pc_btns)
+    
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="menu_find"))
+    
+    bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
+def cb_join_lobby(c):
+    _, league, device, slot = c.data.split("_")
+    slot = int(slot)
+    uid = c.from_user.id
+    lobby_id = f"{league}_{device}_{slot}"
+    
+    # Выход из старого лобби
+    old = user_lobby.get(uid)
+    if old and old in active_lobbies:
+        if uid in active_lobbies[old]["players"]:
+            active_lobbies[old]["players"].remove(uid)
+    
+    # Создание лобби
+    if lobby_id not in active_lobbies:
+        active_lobbies[lobby_id] = {
+            "id": lobby_id,
+            "league": league,
+            "device": device,
+            "slot": slot,
+            "players": [],
+            "status": "waiting"
+        }
+    
+    lobby = active_lobbies[lobby_id]
+    
+    if len(lobby["players"]) >= 10:
+        bot.answer_callback_query(c.id, "❌ Лобби полное!", show_alert=True)
+        return
+    
+    lobby["players"].append(uid)
+    user_lobby[uid] = lobby_id
+    
+    bot.answer_callback_query(c.id, f"✅ Вы вошли в лобби {league} {device} {slot}!")
+    
+    # Показываем состав лобби
+    text = f"🎮 <b>Лобби #{slot} ({league.upper()}/{device.upper()})</b>\n👥 Игроков: {len(lobby['players'])}/10\n\n"
+    for i, pid in enumerate(lobby["players"], 1):
+        p = get_player(pid)
+        name = p[1] if p else str(pid)
+        text += f"{i}. {name}\n"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🚪 Покинуть лобби", callback_data=f"leave_{lobby_id}"))
+    kb.add(types.InlineKeyboardButton("🔙 К списку", callback_data=f"lobby_{league}"))
+    
+    bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("leave_"))
+def cb_leave_lobby(c):
+    lobby_id = c.data.split("_", 1)[1]
+    uid = c.from_user.id
+    
+    if lobby_id in active_lobbies and uid in active_lobbies[lobby_id]["players"]:
+        active_lobbies[lobby_id]["players"].remove(uid)
+        user_lobby.pop(uid, None)
+        
+        if len(active_lobbies[lobby_id]["players"]) == 0:
+            del active_lobbies[lobby_id]
+    
+    bot.answer_callback_query(c.id, "✅ Вы покинули лобби")
+    # Возврат к списку лобби
+    league = lobby_id.split("_")[0]
+    cb_show_lobbies(c)
+
+@bot.callback_query_handler(func=lambda c: c.data == "menu_back")
+def cb_menu_back(c):
+    bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=main_menu())
+    bot.answer_callback_query(c.id)
 # ==================== ОСТАЛЬНЫЕ КНОПКИ ====================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("menu_") and c.data != "menu_profile")
 def cb_other(c):
     action = c.data.split("_")[1]
     bot.edit_message_text(f"🚧 {action} в разработке", c.message.chat.id, c.message.message_id)
     bot.answer_callback_query(c.id)
+# ==================== ЛОББИ ====================
+active_lobbies = {}  # lobby_id -> {"players": [], "league": str}
+user_lobby = {}      # user_id -> lobby_id
 
+@bot.callback_query_handler(func=lambda c: c.data == "menu_find")
+def cb_find_match(c):
+    uid = c.from_user.id
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🎮 Default", callback_data="lobby_default"),
+        types.InlineKeyboardButton("⭐ Quals", callback_data="lobby_quals"),
+        types.InlineKeyboardButton("🔙 Назад", callback_data="menu_back")
+    )
+    bot.edit_message_text("🎮 Выбери лигу:", c.message.chat.id, c.message.message_id, reply_markup=kb)
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lobby_"))
+def cb_show_lobbies(c):
+    league = c.data.split("_")[1]
+    
+    # Формируем список лобби
+    text = f"🎮 <b>Лобби {league.upper()}</b>\n\n"
+    kb = types.InlineKeyboardMarkup(row_width=5)
+    
+    # Ряд MOBILE
+    mobile_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_mobile_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        mobile_btns.append(types.InlineKeyboardButton(f"{emoji}{slot}", callback_data=f"join_{league}_mobile_{slot}"))
+    kb.row(*mobile_btns)
+    
+    # Ряд PC
+    pc_btns = []
+    for slot in range(1, 6):
+        lobby_id = f"{league}_pc_{slot}"
+        lobby = active_lobbies.get(lobby_id)
+        count = len(lobby["players"]) if lobby else 0
+        emoji = "🟢" if count > 0 else "⚪"
+        pc_btns.append(types.InlineKeyboardButton(f"{emoji}{slot}", callback_data=f"join_{league}_pc_{slot}"))
+    kb.row(*pc_btns)
+    
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="menu_find"))
+    
+    bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+    bot.answer_callback_query(c.id)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("join_"))
+def cb_join_lobby(c):
+    _, league, device, slot = c.data.split("_")
+    slot = int(slot)
+    uid = c.from_user.id
+    lobby_id = f"{league}_{device}_{slot}"
+    
+    # Выход из старого лобби
+    old = user_lobby.get(uid)
+    if old and old in active_lobbies:
+        if uid in active_lobbies[old]["players"]:
+            active_lobbies[old]["players"].remove(uid)
+    
+    # Создание лобби
+    if lobby_id not in active_lobbies:
+        active_lobbies[lobby_id] = {
+            "id": lobby_id,
+            "league": league,
+            "device": device,
+            "slot": slot,
+            "players": [],
+            "status": "waiting"
+        }
+    
+    lobby = active_lobbies[lobby_id]
+    
+    if len(lobby["players"]) >= 10:
+        bot.answer_callback_query(c.id, "❌ Лобби полное!", show_alert=True)
+        return
+    
+    lobby["players"].append(uid)
+    user_lobby[uid] = lobby_id
+    
+    bot.answer_callback_query(c.id, f"✅ Вы вошли в лобби {league} {device} {slot}!")
+    
+    # Показываем состав лобби
+    text = f"🎮 <b>Лобби #{slot} ({league.upper()}/{device.upper()})</b>\n👥 Игроков: {len(lobby['players'])}/10\n\n"
+    for i, pid in enumerate(lobby["players"], 1):
+        p = get_player(pid)
+        name = p[1] if p else str(pid)
+        text += f"{i}. {name}\n"
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🚪 Покинуть лобби", callback_data=f"leave_{lobby_id}"))
+    kb.add(types.InlineKeyboardButton("🔙 К списку", callback_data=f"lobby_{league}"))
+    
+    bot.edit_message_text(text, c.message.chat.id, c.message.message_id, reply_markup=kb, parse_mode="HTML")
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("leave_"))
+def cb_leave_lobby(c):
+    lobby_id = c.data.split("_", 1)[1]
+    uid = c.from_user.id
+    
+    if lobby_id in active_lobbies and uid in active_lobbies[lobby_id]["players"]:
+        active_lobbies[lobby_id]["players"].remove(uid)
+        user_lobby.pop(uid, None)
+        
+        if len(active_lobbies[lobby_id]["players"]) == 0:
+            del active_lobbies[lobby_id]
+    
+    bot.answer_callback_query(c.id, "✅ Вы покинули лобби")
+    # Возврат к списку лобби
+    league = lobby_id.split("_")[0]
+    cb_show_lobbies(c)
+
+@bot.callback_query_handler(func=lambda c: c.data == "menu_back")
+def cb_menu_back(c):
+    bot.edit_message_reply_markup(c.message.chat.id, c.message.message_id, reply_markup=main_menu())
+    bot.answer_callback_query(c.id)
 # ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     init_db()
