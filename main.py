@@ -18,7 +18,7 @@ def run_flask():
 threading.Thread(target=run_flask, daemon=True).start()
 
 # Токен из переменных окружения Render
-TOKEN = os.environ.get("BOT_TOKEN", "8992378453:AAE5chYJsnbCPHS1YMZ03BWoCR8XK1lcSfA")
+TOKEN = os.environ.get("8992378453:AAErkHAlWAYJJG54xnBntSW13ZNmc7zxOFA")
 ADMIN_ID = 8521250777
 
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
